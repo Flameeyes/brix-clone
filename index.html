@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>BRIX</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <canvas id="screen" width="320" height="200"></canvas>
+    <form id="name-entry" hidden>
+      <p class="caption"></p>
+      <label>ENTER NAME <input name="name" maxlength="14" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+      <button type="submit">OK</button>
+    </form>
+  </main>
+  <nav id="pad" aria-label="Touch controls">
+    <div class="dpad">
+      <button data-action="up" class="up" aria-label="Up">▲</button>
+      <button data-action="left" class="left" aria-label="Left">◀</button>
+      <button data-action="fire" class="fire" aria-label="Select">●</button>
+      <button data-action="right" class="right" aria-label="Right">▶</button>
+      <button data-action="down" class="down" aria-label="Down">▼</button>
+    </div>
+    <div class="keys">
+      <button data-action="retry">RETRY</button>
+      <button data-action="sound">SOUND</button>
+      <button data-action="escape">ESC</button>
+    </div>
+  </nav>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

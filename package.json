@@ -1,0 +1,16 @@
+{
+  "name": "brix-clone",
+  "version": "1.0.0",
+  "description": "A browser remake of BRIX, the 1991 DOS puzzle game by Michael Riedel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test tests/*.test.js",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^5.9.3"
+  }
+}
