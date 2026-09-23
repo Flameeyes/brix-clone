@@ -1,6 +1,9 @@
 // @ts-check
 import { FIELD_HEIGHT, FIELD_WIDTH } from './levels.js';
 
+// A port of the playing field logic of the original BRIX.EXE. Comments point
+// out the original's behaviour where it is not obvious.
+
 export const EMPTY = 0;
 export const BLOCK = 10;
 export const WALL = 11;
@@ -8,63 +11,44 @@ export const LIFT = 12;
 export const OUTSIDE = 13;
 
 export const TILE = 16;
-export const FALL_SPEED = 4;
-export const SLIDE_SPEED = 2;
-export const LIFT_SPEED = 1;
-export const BLAST_TICKS = 60;
+/** Lift steps spent waiting after hitting an obstacle, before moving back. */
+const LIFT_PAUSE = 10;
 
 /** @param {number} kind */
-export const isIcon = (kind) => kind >= 1 && kind <= 9;
+export const isIcon = (kind) => kind >= 1 && kind <= 8;
 
 /**
- * A single square of the playing field. Moving things are stored in the
- * square they are heading to, with an offset (in pixels) from its center
- * that shrinks towards zero at `speed` pixels per tick.
- *
- * @typedef {{
- *   id: number,
- *   kind: number,
- *   ox: number,
- *   oy: number,
- *   speed: number,
- *   falling: boolean,
- *   blast: number,
- * }} Cell
- *
- * @typedef {{x: number, y: number, direction: 1 | -1}} Lift
- *
- * @typedef {
- *   | {type: 'blast', kind: number, size: number, x: number, y: number}
- *   | {type: 'land'}
- * } BoardEvent
+ * @typedef {{x: number, y: number}} Point
+ * @typedef {{x: number, y: number, direction: 1 | -1, offset: number, pause: number, riders: number}} Lift
+ * @typedef {{cells: Point[], chain: number}} Blast
  */
-
-let nextCellId = 1;
-
-/** @param {number} kind @returns {Cell} */
-const makeCell = (kind) => ({ id: nextCellId++, kind, ox: 0, oy: 0, speed: 0, falling: false, blast: 0 });
-
-/** @param {number} value @param {number} step */
-const approachZero = (value, step) => (value > 0 ? Math.max(0, value - step) : Math.min(0, value + step));
 
 export class Board {
   /**
-   * @param {number[]} grid
+   * @param {number[]} grid 14x12 tile ids, row by row
    * @param {{x: number, y: number, direction: 1 | -1} | null} lift
+   * @param {Point} cursor
    */
-  constructor(grid, lift) {
-    /** @type {Cell[]} */
-    this.cells = grid.map(makeCell);
-    /** @type {Lift[]} */
-    this.lifts = [];
-    this.cells.forEach((cell, i) => {
-      if (cell.kind === LIFT) {
-        const x = i % FIELD_WIDTH;
-        const y = Math.floor(i / FIELD_WIDTH);
-        const direction = lift && lift.x === x && lift.y === y ? lift.direction : -1;
-        this.lifts.push({ x, y, direction });
-      }
-    });
+  constructor(grid, lift, cursor) {
+    this.cells = [...grid];
+    /** @type {Lift | null} */
+    this.lift = lift ? { ...lift, offset: 0, pause: 0, riders: 0 } : null;
+    if (this.lift) {
+      this.set(this.lift.x, this.lift.y, LIFT);
+    }
+    /** Icons dropping one row. They all move together, `fallOffset` pixels so far. */
+    /** @type {Point[]} */
+    this.falling = [];
+    this.fallOffset = 0;
+    this.cursor = { ...cursor };
+    /** An icon is grabbed and moves with the cursor. */
+    this.selected = false;
+    /** The cursor is following a grabbed icon that is falling. */
+    this.following = false;
+    /** The cursor is following a grabbed icon riding the lift. */
+    this.riding = false;
+    /** Icons blasted since the player last moved one; long chains earn a bonus. */
+    this.chain = 0;
   }
 
   /** @param {number} x @param {number} y */
@@ -72,100 +56,35 @@ export class Board {
     return x >= 0 && y >= 0 && x < FIELD_WIDTH && y < FIELD_HEIGHT;
   }
 
-  /** @param {number} x @param {number} y @returns {Cell} */
+  /** @param {number} x @param {number} y */
   at(x, y) {
-    if (!this.inside(x, y)) {
-      return makeCell(OUTSIDE);
-    }
-    return this.cells[y * FIELD_WIDTH + x];
+    return this.inside(x, y) ? this.cells[y * FIELD_WIDTH + x] : OUTSIDE;
   }
 
-  /** @param {number} x @param {number} y @param {Cell} cell */
-  put(x, y, cell) {
-    this.cells[y * FIELD_WIDTH + x] = cell;
+  /** @param {number} x @param {number} y @param {number} kind */
+  set(x, y, kind) {
+    this.cells[y * FIELD_WIDTH + x] = kind;
   }
 
   /** @param {number} x @param {number} y */
-  isStill(x, y) {
-    const cell = this.at(x, y);
-    return cell.ox === 0 && cell.oy === 0 && cell.blast === 0;
+  isFalling(x, y) {
+    return this.falling.some((p) => p.x === x && p.y === y);
   }
 
-  /**
-   * An icon can take part in a blast once it stands still on something that
-   * is not about to disappear.
-   *
-   * @param {number} x @param {number} y
-   * @returns {boolean}
-   */
-  isResting(x, y) {
-    const cell = this.at(x, y);
-    if (!isIcon(cell.kind) || cell.falling || !this.isStill(x, y)) {
-      return false;
-    }
-    const below = this.at(x, y + 1);
-    if (below.kind === BLOCK || below.kind === WALL || below.kind === OUTSIDE) {
-      return true;
-    }
-    if (below.kind === LIFT) {
-      return below.oy === 0;
-    }
-    return isIcon(below.kind) && this.isResting(x, y + 1);
-  }
-
-  /** @param {number} x @param {number} y */
-  canGrab(x, y) {
-    const cell = this.at(x, y);
-    return isIcon(cell.kind) && !cell.falling && cell.blast === 0 && cell.ox === 0;
-  }
-
-  /**
-   * Slides the icon at (x, y) one square sideways.
-   *
-   * @param {number} x @param {number} y @param {-1 | 1} dx
-   * @returns {boolean} whether the icon moved
-   */
-  slide(x, y, dx) {
-    if (!this.canGrab(x, y) || this.at(x + dx, y).kind !== EMPTY) {
-      return false;
-    }
-    const cell = this.at(x, y);
-    // An icon riding a lift may be between two rows; make sure the row it is
-    // overlapping in the target column is free as well.
-    if (cell.oy !== 0 && this.at(x + dx, y + Math.sign(cell.oy)).kind !== EMPTY) {
-      return false;
-    }
-    this.put(x + dx, y, { ...cell, ox: -dx * TILE, speed: SLIDE_SPEED });
-    this.put(x, y, makeCell(EMPTY));
-    return true;
-  }
-
-  /**
-   * @param {number} id
-   * @returns {{x: number, y: number, cell: Cell} | null}
-   */
-  find(id) {
-    const index = this.cells.findIndex((cell) => cell.id === id);
-    if (index < 0) {
-      return null;
-    }
-    return { x: index % FIELD_WIDTH, y: Math.floor(index / FIELD_WIDTH), cell: this.cells[index] };
-  }
-
-  /** @returns {Map<number, number>} remaining icons by kind, including ones being blasted */
+  /** @returns {Map<number, number>} */
   iconCounts() {
     /** @type {Map<number, number>} */
     const counts = new Map();
-    for (const cell of this.cells) {
-      if (isIcon(cell.kind)) {
-        counts.set(cell.kind, (counts.get(cell.kind) ?? 0) + 1);
+    for (const kind of this.cells) {
+      if (isIcon(kind)) {
+        counts.set(kind, (counts.get(kind) ?? 0) + 1);
       }
     }
     return counts;
   }
 
   isCleared() {
-    return this.cells.every((cell) => !isIcon(cell.kind));
+    return this.cells.every((kind) => !isIcon(kind));
   }
 
   /** An icon that is the last of its kind can never be blasted. */
@@ -173,164 +92,361 @@ export class Board {
     return [...this.iconCounts().values()].some((count) => count === 1);
   }
 
-  /** @returns {BoardEvent[]} */
-  tick() {
-    /** @type {BoardEvent[]} */
-    const events = [];
-    this.advanceMotion();
-    this.finishBlasts();
-    this.applyGravity(events);
-    this.findBlasts(events);
-    this.moveLifts();
-    return events;
+  /**
+   * Whether (x, y) belongs to the lift or the stack it carries; while the
+   * lift moves this includes the square it is moving into.
+   *
+   * @param {number} x @param {number} y
+   */
+  inLiftColumn(x, y) {
+    const lift = this.lift;
+    if (!lift || x !== lift.x) {
+      return false;
+    }
+    const top = lift.y - lift.riders;
+    if (lift.offset > 0) {
+      return y >= top && y <= lift.y + 1;
+    }
+    if (lift.offset < 0) {
+      return y >= top - 1 && y <= lift.y;
+    }
+    return y >= top && y <= lift.y;
   }
 
-  advanceMotion() {
-    for (const cell of this.cells) {
-      if (cell.ox !== 0 || cell.oy !== 0) {
-        cell.ox = approachZero(cell.ox, cell.speed);
-        cell.oy = approachZero(cell.oy, cell.speed);
+  /** @param {number} x @param {number} y */
+  isMovingWithLift(x, y) {
+    return this.inLiftColumn(x, y) && this.lift?.offset !== 0;
+  }
+
+  /** @param {Point} point */
+  isRider(point) {
+    const lift = this.lift;
+    return lift !== null && point.x === lift.x && point.y < lift.y && point.y >= lift.y - lift.riders;
+  }
+
+  countRiders() {
+    const lift = this.lift;
+    if (!lift) {
+      return;
+    }
+    let riders = 0;
+    while (isIcon(this.at(lift.x, lift.y - riders - 1))) {
+      if (this.selected && this.cursor.x === lift.x && this.cursor.y === lift.y - riders - 1) {
+        this.riding = true;
       }
+      riders += 1;
+    }
+    lift.riders = riders;
+  }
+
+  // Player actions
+
+  /** @param {number} dx @param {number} dy */
+  moveCursor(dx, dy) {
+    if (this.selected) {
+      return false;
+    }
+    const x = this.cursor.x + dx;
+    const y = this.cursor.y + dy;
+    const kind = this.at(x, y);
+    if (kind === WALL || kind === OUTSIDE) {
+      return false;
+    }
+    this.cursor = { x, y };
+    return true;
+  }
+
+  toggleSelect() {
+    if (!isIcon(this.at(this.cursor.x, this.cursor.y)) || this.following) {
+      return false;
+    }
+    this.selected = !this.selected;
+    if (this.isRider(this.cursor)) {
+      this.riding = !this.riding;
+    }
+    return true;
+  }
+
+  release() {
+    if (this.selected && !this.following) {
+      this.toggleSelect();
     }
   }
 
-  finishBlasts() {
-    this.cells.forEach((cell, i) => {
-      if (cell.blast > 0) {
-        cell.blast -= 1;
-        if (cell.blast === 0) {
-          this.cells[i] = makeCell(EMPTY);
-        }
+  /**
+   * Moves the grabbed icon one square sideways, instantly. Nothing may move
+   * while anything on the field is falling.
+   *
+   * @param {-1 | 1} dx
+   * @returns {boolean}
+   */
+  slide(dx) {
+    const { x, y } = this.cursor;
+    const lift = this.lift;
+    if (!this.selected || !isIcon(this.at(x, y)) || this.at(x + dx, y) !== EMPTY || this.falling.length > 0) {
+      return false;
+    }
+    if (this.riding && lift && lift.offset !== 0) {
+      return false;
+    }
+    if (lift && x + dx === lift.x) {
+      if (y === lift.y + 1 && lift.offset > 0) {
+        return false;
       }
-    });
-  }
-
-  /** @param {BoardEvent[]} events */
-  applyGravity(events) {
-    for (let y = FIELD_HEIGHT - 2; y >= 0; y--) {
-      for (let x = 0; x < FIELD_WIDTH; x++) {
-        const cell = this.at(x, y);
-        if (!isIcon(cell.kind) || !this.isStill(x, y)) {
-          continue;
-        }
-        const below = this.at(x, y + 1);
-        if (below.kind === EMPTY) {
-          // Never overtake whatever is sinking in the square underneath.
-          const beneath = this.at(x, y + 2);
-          const speed = beneath.oy < 0 ? Math.min(FALL_SPEED, beneath.speed) : FALL_SPEED;
-          this.put(x, y + 1, { ...cell, oy: -TILE, speed, falling: true });
-          this.put(x, y, makeCell(EMPTY));
-        } else if (cell.falling && !(isIcon(below.kind) && below.falling)) {
-          cell.falling = false;
-          events.push({ type: 'land' });
-        }
+      if (y === lift.y - lift.riders - 1 && lift.offset < 0) {
+        return false;
       }
     }
+    this.set(x + dx, y, this.at(x, y));
+    this.set(x, y, EMPTY);
+    this.cursor = { x: x + dx, y };
+    this.chain = 0;
+    if (this.riding && lift) {
+      // Whatever was stacked above the icon on the lift drops into the gap.
+      const top = lift.y - lift.riders;
+      for (let row = y; row > top; row--) {
+        this.set(x, row, this.at(x, row - 1));
+      }
+      this.set(x, top, EMPTY);
+      this.riding = false;
+    }
+    return true;
   }
 
-  /** @param {BoardEvent[]} events */
-  findBlasts(events) {
-    const seen = new Set();
-    for (let y = 0; y < FIELD_HEIGHT; y++) {
-      for (let x = 0; x < FIELD_WIDTH; x++) {
-        const start = y * FIELD_WIDTH + x;
-        if (seen.has(start) || !this.isResting(x, y)) {
-          continue;
-        }
-        const kind = this.at(x, y).kind;
-        const group = [start];
-        seen.add(start);
-        for (let i = 0; i < group.length; i++) {
-          const gx = group[i] % FIELD_WIDTH;
-          const gy = Math.floor(group[i] / FIELD_WIDTH);
-          for (const [nx, ny] of [[gx - 1, gy], [gx + 1, gy], [gx, gy - 1], [gx, gy + 1]]) {
-            const index = ny * FIELD_WIDTH + nx;
-            if (this.inside(nx, ny) && !seen.has(index) && this.at(nx, ny).kind === kind && this.isResting(nx, ny)) {
-              seen.add(index);
-              group.push(index);
-            }
+  // Timed steps, driven by the game loop
+
+  /**
+   * When nothing is mid-fall, looks for blasts and for icons that start
+   * falling; then moves the falling icons down by a pixel.
+   *
+   * @returns {Blast | null} icons to blast, which freezes the game until
+   *   `removeBlast` is called
+   */
+  gravityStep() {
+    /** @type {Blast | null} */
+    let blast = null;
+    if (this.fallOffset === 0) {
+      this.findFalling();
+      blast = this.makeBlast(this.matchAll());
+    }
+    if (this.falling.length === 0) {
+      return blast;
+    }
+    this.fallOffset += 1;
+    for (let i = 0; i < this.falling.length; i++) {
+      const icon = this.falling[i];
+      const followed = this.selected && icon.x === this.cursor.x && icon.y === this.cursor.y;
+      if (followed) {
+        this.following = true;
+      }
+      if (this.landOnLift(icon)) {
+        if (followed) {
+          this.riding = true;
+          this.following = false;
+          if (this.lift?.direction === -1) {
+            this.cursor.y += 1;
           }
         }
-        if (group.length > 1) {
-          for (const index of group) {
-            this.cells[index].blast = BLAST_TICKS;
-          }
-          events.push({ type: 'blast', kind, size: group.length, x, y });
-        }
+        this.falling.splice(i, 1);
+        i -= 1;
       }
     }
+    if (this.fallOffset === TILE) {
+      this.fallOffset = 0;
+      if (this.following) {
+        this.cursor.y += 1;
+        this.following = false;
+      }
+      for (const icon of this.falling) {
+        this.set(icon.x, icon.y + 1, this.at(icon.x, icon.y));
+        this.set(icon.x, icon.y, EMPTY);
+      }
+      this.falling = [];
+    }
+    return blast;
   }
 
-  moveLifts() {
-    for (const lift of this.lifts) {
-      if (!this.isStill(lift.x, lift.y)) {
-        continue;
-      }
-      const verdict = this.canLiftMove(lift);
-      if (verdict === 'blocked') {
-        lift.direction = lift.direction === 1 ? -1 : 1;
-      } else if (verdict === 'go') {
-        this.shiftLift(lift);
+  findFalling() {
+    const lift = this.lift;
+    this.falling = [];
+    for (let x = FIELD_WIDTH - 2; x >= 1; x--) {
+      for (let y = FIELD_HEIGHT - 2; y >= 1; y--) {
+        if (!isIcon(this.at(x, y))) {
+          continue;
+        }
+        if (this.at(x, y + 1) !== EMPTY) {
+          // An icon sitting on a stack that the lift carries down follows
+          // it, and joins the stack once it catches up.
+          const onSinkingStack = lift !== null && lift.direction > 0 && lift.offset !== 0
+            && x === lift.x && lift.y - lift.riders === y + 1;
+          if (!onSinkingStack) {
+            continue;
+          }
+        }
+        this.falling.push({ x, y });
       }
     }
   }
 
   /**
-   * @param {Lift} lift
-   * @returns {'go' | 'wait' | 'blocked'}
+   * A falling icon that reaches the stack on a moving lift becomes part of it.
+   *
+   * @param {Point} icon
    */
-  canLiftMove(lift) {
-    const riders = this.riders(lift);
-    if (riders === null) {
-      return 'wait';
+  landOnLift(icon) {
+    const lift = this.lift;
+    if (!lift || icon.x !== lift.x) {
+      return false;
     }
-    const target = lift.direction === -1
-      ? this.at(lift.x, lift.y - riders - 1)
-      : this.at(lift.x, lift.y + 1);
-    if (target.kind === EMPTY) {
-      return 'go';
+    if (lift.direction > 0) {
+      if (icon.y === lift.y - lift.riders - 1 && lift.offset <= this.fallOffset) {
+        lift.riders += 1;
+        return true;
+      }
+    } else if (icon.y === lift.y - lift.riders - 2 && lift.offset + TILE <= this.fallOffset) {
+      lift.riders += 1;
+      this.set(icon.x, icon.y + 1, this.at(icon.x, icon.y));
+      this.set(icon.x, icon.y, EMPTY);
+      return true;
     }
-    if (isIcon(target.kind) && (target.falling || target.blast > 0 || target.ox !== 0)) {
-      return 'wait';
-    }
-    return 'blocked';
+    return false;
   }
 
   /**
-   * @param {Lift} lift
-   * @returns {number | null} how many icons are stacked on the lift, or null
-   *   while any of them is still moving on its own
+   * Every icon that is not about to fall blasts, together with the matching
+   * icons next to it. Icons on a moving lift are left to the lift's checks.
+   *
+   * @returns {Point[]}
    */
-  riders(lift) {
-    let count = 0;
-    for (let y = lift.y - 1; y >= 0 && isIcon(this.at(lift.x, y).kind); y--) {
-      if (!this.isStill(lift.x, y)) {
+  matchAll() {
+    /** @type {Point[]} */
+    const found = [];
+    for (let x = 1; x < FIELD_WIDTH - 1; x++) {
+      for (let y = 1; y < FIELD_HEIGHT - 1; y++) {
+        const kind = this.at(x, y);
+        if (!isIcon(kind) || this.isFalling(x, y) || this.isMovingWithLift(x, y)) {
+          continue;
+        }
+        const matches = [[x, y - 1], [x, y + 1], [x + 1, y], [x - 1, y]].some(
+          ([nx, ny]) => this.at(nx, ny) === kind && !this.isMovingWithLift(nx, ny) && !this.isFalling(nx, ny),
+        );
+        if (matches) {
+          found.push({ x, y });
+        }
+      }
+    }
+    return found;
+  }
+
+  /**
+   * One step of the lift: a pixel of movement, or at a square boundary the
+   * decision where to go next. When its way is blocked it pauses briefly and
+   * turns around.
+   *
+   * @returns {Blast | null}
+   */
+  liftStep() {
+    const lift = this.lift;
+    if (!lift) {
+      return null;
+    }
+    if (lift.pause > 0) {
+      lift.pause -= 1;
+      return null;
+    }
+    if (lift.offset !== 0) {
+      lift.offset += lift.direction;
+      if (Math.abs(lift.offset) < TILE) {
         return null;
       }
-      count += 1;
+      lift.offset = 0;
+      this.shiftLift(lift);
+      return this.makeBlast(this.matchBesideRiders(lift));
     }
-    return count;
+    this.countRiders();
+    const blast = this.makeBlast(this.matchWithinStack(lift));
+    const above = this.at(lift.x, lift.y - lift.riders - 1);
+    const below = this.at(lift.x, lift.y + 1);
+    if ((lift.direction < 0 && above === EMPTY) || (lift.direction > 0 && below === EMPTY)) {
+      lift.offset = lift.direction;
+    } else {
+      lift.direction = lift.direction > 0 ? -1 : 1;
+      lift.pause = LIFT_PAUSE;
+    }
+    return blast;
   }
 
   /** @param {Lift} lift */
   shiftLift(lift) {
-    const riders = this.riders(lift) ?? 0;
-    const top = lift.y - riders;
-    const column = [];
-    for (let y = top; y <= lift.y; y++) {
-      column.push(this.at(lift.x, y));
+    const top = lift.y - lift.riders;
+    if (lift.direction < 0) {
+      for (let y = top - 1; y < lift.y; y++) {
+        this.set(lift.x, y, this.at(lift.x, y + 1));
+      }
+      this.set(lift.x, lift.y, EMPTY);
+    } else {
+      for (let y = lift.y + 1; y > top; y--) {
+        this.set(lift.x, y, this.at(lift.x, y - 1));
+      }
+      this.set(lift.x, top, EMPTY);
     }
-    for (let y = top; y <= lift.y; y++) {
-      this.put(lift.x, y, makeCell(EMPTY));
-    }
-    column.forEach((cell, i) => {
-      this.put(lift.x, top + i + lift.direction, {
-        ...cell,
-        oy: -lift.direction * TILE,
-        speed: LIFT_SPEED,
-        falling: false,
-      });
-    });
     lift.y += lift.direction;
+    if (this.riding) {
+      this.cursor.y += lift.direction;
+    }
+  }
+
+  /** @param {Lift} lift @returns {Point[]} */
+  matchBesideRiders(lift) {
+    this.countRiders();
+    /** @type {Point[]} */
+    const found = [];
+    for (let i = 0; i < lift.riders; i++) {
+      const y = lift.y - i - 1;
+      const kind = this.at(lift.x, y);
+      const neighbours = [lift.x - 1, lift.x + 1].filter((x) => this.at(x, y) === kind && !this.isFalling(x, y));
+      if (neighbours.length > 0) {
+        found.push(...neighbours.map((x) => ({ x, y })), { x: lift.x, y });
+      }
+    }
+    return found;
+  }
+
+  /** @param {Lift} lift @returns {Point[]} */
+  matchWithinStack(lift) {
+    /** @type {Point[]} */
+    const found = [];
+    for (let i = 0; i < lift.riders; i++) {
+      const y = lift.y - i - 1;
+      if (this.at(lift.x, y - 1) === this.at(lift.x, y)) {
+        found.push({ x: lift.x, y }, { x: lift.x, y: y - 1 });
+      }
+    }
+    return found;
+  }
+
+  /**
+   * @param {Point[]} cells
+   * @returns {Blast | null}
+   */
+  makeBlast(cells) {
+    const unique = cells.filter((cell, i) => cells.findIndex((c) => c.x === cell.x && c.y === cell.y) === i);
+    if (unique.length === 0) {
+      return null;
+    }
+    this.chain += unique.length;
+    return { cells: unique, chain: this.chain };
+  }
+
+  /** @param {Blast} blast */
+  removeBlast(blast) {
+    for (const { x, y } of blast.cells) {
+      this.set(x, y, EMPTY);
+      if (x === this.cursor.x && y === this.cursor.y) {
+        this.selected = false;
+        this.riding = false;
+      }
+    }
+    this.countRiders();
   }
 }

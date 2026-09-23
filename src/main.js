@@ -1,5 +1,5 @@
 // @ts-check
-import { Game, TICKS_PER_SECOND } from './game.js';
+import { Game } from './game.js';
 import { parseLevels } from './levels.js';
 import { Renderer, SCREEN_HEIGHT, SCREEN_WIDTH } from './render.js';
 import { Sound } from './sound.js';
@@ -148,17 +148,12 @@ async function main() {
   bindPointer(canvas, game, sound);
   bindTouchPad(/** @type {HTMLElement} */ (document.getElementById('pad')), game, sound);
 
-  const step = 1000 / TICKS_PER_SECOND;
   let last = performance.now();
-  let pending = 0;
   /** @param {number} now */
   const loop = (now) => {
-    pending = Math.min(pending + now - last, 250);
+    // After the tab was hidden, carry on rather than fast-forwarding.
+    game.update(Math.min(now - last, 100));
     last = now;
-    while (pending >= step) {
-      game.update();
-      pending -= step;
-    }
     game.draw();
     requestAnimationFrame(loop);
   };

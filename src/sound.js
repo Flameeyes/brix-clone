@@ -25,8 +25,12 @@ export class Sound {
     this.enabled = !this.enabled;
   }
 
-  /** @param {number[]} frequencies @param {number} step */
-  play(frequencies, step) {
+  /**
+   * @param {number[]} frequencies
+   * @param {number} step
+   * @param {number} [delay] seconds before the sound starts
+   */
+  play(frequencies, step, delay = 0) {
     const audio = this.audio;
     if (!this.enabled || !audio || audio.state !== 'running') {
       return;
@@ -35,7 +39,7 @@ export class Sound {
     const gain = audio.createGain();
     oscillator.type = 'square';
     gain.gain.value = 0.06;
-    const start = audio.currentTime;
+    const start = audio.currentTime + delay;
     frequencies.forEach((frequency, i) => oscillator.frequency.setValueAtTime(frequency, start + i * step));
     oscillator.connect(gain).connect(audio.destination);
     oscillator.start(start);
@@ -50,14 +54,13 @@ export class Sound {
     this.play([660, 880], 0.02);
   }
 
-  land() {
-    this.play([110], 0.03);
-  }
-
-  /** @param {number} size */
-  blast(size) {
-    const sweep = Array.from({ length: 10 + size * 2 }, (_, i) => 1400 - i * 90 + (i % 2) * 300);
-    this.play(sweep, 0.015);
+  /**
+   * The original crackles through the sparkle frames that follow the icons
+   * flashing, dropping in pitch from frame to frame.
+   */
+  blast() {
+    const crackle = Array.from({ length: 5 * 30 }, (_, i) => 700 + Math.random() * 900 - Math.floor(i / 30) * 120);
+    this.play(crackle, 0.11 / 30, 0.84);
   }
 
   tick() {

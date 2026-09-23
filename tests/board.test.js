@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { BLAST_TICKS, Board, EMPTY, LIFT, isIcon } from '../src/board.js';
+import { Board, EMPTY, LIFT, TILE, isIcon } from '../src/board.js';
 import { FIELD_WIDTH, firstProblemIndex, parseLevels } from '../src/levels.js';
+
+/** @typedef {import('../src/board.js').Blast} Blast */
 
 const levels = parseLevels(new Uint8Array(readFileSync(new URL('../data/LEVELS', import.meta.url))));
 
@@ -13,9 +15,10 @@ const levels = parseLevels(new Uint8Array(readFileSync(new URL('../data/LEVELS',
  * '#' wall, 'X' block, '.' empty, 'L' lift, digits are icons.
  *
  * @param {string[]} rows
+ * @param {{x: number, y: number}} [cursor]
  * @param {1 | -1} [liftDirection]
  */
-function boardFrom(rows, liftDirection = -1) {
+function boardFrom(rows, cursor = { x: 1, y: 1 }, liftDirection = -1) {
   const grid = new Array(FIELD_WIDTH * 12).fill(11);
   /** @type {{x: number, y: number, direction: 1 | -1} | null} */
   let lift = null;
@@ -28,26 +31,42 @@ function boardFrom(rows, liftDirection = -1) {
       }
     });
   });
-  return new Board(grid, lift);
+  return new Board(grid, lift, cursor);
 }
 
-/** @param {Board} board @param {number} ticks */
-function run(board, ticks) {
-  const events = [];
-  for (let i = 0; i < ticks; i++) {
-    events.push(...board.tick());
+/**
+ * Runs the board like the game does, three gravity steps per lift step, and
+ * resolves blasts immediately.
+ *
+ * @param {Board} board
+ * @param {number} liftSteps
+ */
+function run(board, liftSteps) {
+  /** @type {Blast[]} */
+  const blasts = [];
+  for (let i = 0; i < liftSteps; i++) {
+    for (const step of [() => board.gravityStep(), () => board.liftStep(), () => board.gravityStep(), () => board.gravityStep()]) {
+      const blast = step();
+      if (blast) {
+        blasts.push(blast);
+        board.removeBlast(blast);
+      }
+    }
   }
-  return events;
+  return blasts;
 }
 
-/** @param {Board} board @param {number} rows */
-function picture(board, rows) {
+/** @type {Record<number, string>} */
+const SYMBOLS = { 0: '.', 10: 'X', 11: '#', 12: 'L' };
+
+/** @param {Board} board @param {number} rows @param {number} columns */
+function picture(board, rows, columns) {
   const lines = [];
   for (let y = 0; y < rows; y++) {
     let line = '';
-    for (let x = 0; x < 6; x++) {
-      const kind = board.at(x, y).kind;
-      line += isIcon(kind) ? String(kind) : { 0: '.', 10: 'X', 11: '#', 12: 'L' }[kind];
+    for (let x = 0; x < columns; x++) {
+      const kind = board.at(x, y);
+      line += isIcon(kind) ? String(kind) : SYMBOLS[kind];
     }
     lines.push(line);
   }
@@ -65,7 +84,7 @@ test('parses all 112 original levels', () => {
 
 test('every level has at least two icons of each kind it uses', () => {
   for (const level of levels) {
-    assert.equal(new Board(level.grid, level.lift).isStuck(), false, `level ${level.index}`);
+    assert.equal(new Board(level.grid, level.lift, level.cursor).isStuck(), false, `level ${level.index}`);
   }
 });
 
@@ -75,80 +94,71 @@ test('the triangle of choices maps onto the level file', () => {
   assert.equal(firstProblemIndex(7, 7), 108);
 });
 
-test('icons fall until they land', () => {
-  const board = boardFrom([
-    '#####',
-    '#.1.#',
-    '#...#',
-    '#...#',
-    '#####',
-  ]);
-  const events = run(board, 20);
-  assert.deepEqual(picture(board, 5).slice(1, 4), ['#...##', '#...##', '#.1.##']);
-  assert.equal(events.filter((e) => e.type === 'land').length, 1);
+test('icons fall a pixel per gravity step', () => {
+  const board = boardFrom(['#####', '#.1.#', '#...#', '#...#', '#####']);
+  for (let i = 0; i < TILE; i++) {
+    assert.equal(board.at(2, 1), 1);
+    board.gravityStep();
+  }
+  assert.equal(board.at(2, 2), 1);
+  run(board, 20);
+  assert.deepEqual(picture(board, 5, 5), ['#####', '#...#', '#...#', '#.1.#', '#####']);
 });
 
-test('adjacent matching icons blast away', () => {
-  const board = boardFrom([
-    '#####',
-    '#1.1#',
-    '#####',
-  ]);
-  assert.ok(board.slide(1, 1, 1));
-  const events = run(board, 20);
-  assert.deepEqual(events, [{ type: 'blast', kind: 1, size: 2, x: 2, y: 1 }]);
-  run(board, BLAST_TICKS);
+test('adjacent matching icons blast, counting towards the chain', () => {
+  const board = boardFrom(['#####', '#1.1#', '#####']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  const blast = board.gravityStep();
+  assert.deepEqual(blast, { cells: [{ x: 2, y: 1 }, { x: 3, y: 1 }], chain: 2 });
+  board.removeBlast(/** @type {Blast} */ (blast));
   assert.ok(board.isCleared());
+  assert.equal(board.selected, false);
 });
 
 test('three icons blast at once', () => {
-  const board = boardFrom([
-    '#####',
-    '#2..#',
-    '#X.2#',
-    '#X2X#',
-    '#####',
-  ]);
-  assert.ok(board.slide(1, 1, 1));
-  const events = run(board, 30);
-  assert.deepEqual(events.filter((e) => e.type === 'blast').map((e) => e.type === 'blast' && e.size), [3]);
+  const board = boardFrom(['#####', '#2..#', '#X.2#', '#X2X#', '#####']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  const blasts = run(board, 10);
+  assert.deepEqual(blasts.map((b) => b.cells.length), [3]);
 });
 
-test('icons cannot slide into occupied squares', () => {
-  const board = boardFrom([
-    '#####',
-    '#12.#',
-    '#####',
-  ]);
-  assert.equal(board.slide(1, 1, 1), false);
-  assert.equal(board.slide(1, 1, -1), false);
-  assert.equal(board.at(1, 1).kind, 1);
+test('nothing can be moved while an icon falls', () => {
+  const board = boardFrom(['######', '#1...#', '#X..3#', '#X..X#', '######']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  board.gravityStep();
+  assert.ok(board.falling.length > 0);
+  assert.equal(board.slide(1), false);
 });
 
-test('lifts carry icons up and turn around at the ceiling', () => {
-  const board = boardFrom([
-    '###',
-    '#.#',
-    '#.#',
-    '#1#',
-    '#L#',
-    '#.#',
-    '###',
-  ]);
-  run(board, 2 * 16 + 1);
-  assert.equal(board.at(1, 1).kind, 1);
-  assert.equal(board.at(1, 2).kind, LIFT);
-  run(board, 3 * 16);
-  assert.equal(board.at(1, 4).kind, 1);
-  assert.equal(board.at(1, 5).kind, LIFT);
-  assert.equal(board.at(1, 1).kind, EMPTY);
+test('the cursor follows a grabbed icon while it falls', () => {
+  const board = boardFrom(['#####', '#1..#', '#X..#', '#X..#', '#####']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  run(board, 12);
+  assert.deepEqual(board.cursor, { x: 2, y: 3 });
+  assert.ok(board.selected);
+  assert.equal(board.at(2, 3), 1);
+});
+
+test('lifts carry icons up, pause and come back down', () => {
+  const board = boardFrom(['###', '#.#', '#.#', '#1#', '#L#', '#.#', '###']);
+  run(board, 2 * TILE + 1);
+  assert.deepEqual(picture(board, 7, 3).slice(1, 3), ['#1#', '#L#']);
+  run(board, 10 + 3 * TILE + 1);
+  assert.equal(board.at(1, 4), 1);
+  assert.equal(board.at(1, 5), LIFT);
+  assert.equal(board.at(1, 1), EMPTY);
+});
+
+test('an icon on a lift blasts with a neighbour when the lift arrives', () => {
+  const board = boardFrom(['####', '#.2#', '#.X#', '#2X#', '#LX#', '####']);
+  const blasts = run(board, 2 * TILE + 1);
+  assert.deepEqual(blasts.map((b) => b.cells.length), [2]);
 });
 
 test('an icon stranded as the last of its kind is detected', () => {
-  const board = boardFrom([
-    '#####',
-    '#1.2#',
-    '#####',
-  ]);
-  assert.ok(board.isStuck());
+  assert.ok(boardFrom(['#####', '#1.2#', '#####']).isStuck());
 });

@@ -7,21 +7,29 @@ public domain (see `data/BRIX.DOC`).
 
 ## Playing
 
-Slide icons left or right. They fall when there is nothing below them, and
-two or more matching icons that touch blast away. Clear every icon before
+Grab an icon and push it left or right. Icons fall when there is nothing
+below them, and matching icons that touch blast away. Clear every icon before
 the time runs out. Watch out for single leftovers: sometimes you need to
-bring three icons together at once.
+bring three icons together at once. Nothing can be moved while something is
+falling, and some problems have a lift that carries icons up and down.
 
 The levels form a tree. Level *N* offers *N* problem sets of four problems
-each, and every set you finish opens the two sets below it at the next level.
-The goal is the set at the bottom right.
+each. You can start with any set in levels 1 to 5; every set you finish opens
+the two sets next to it at the following level. At level 7 you work your way
+down to the goal at the bottom right. If you take longer than ten seconds to
+pick a set, the game picks the highlighted one for you.
+
+Scoring follows the original: 100 points per blasted icon beyond the first,
+a bonus of 400, 600 or 1000 when a chain of blasts between two of your moves
+takes out 4, 5 or 6+ icons, then for each solved problem 1000 × level while
+you have never used a retry, plus 100 × level for every second left.
 
 | Key | Action |
 | --- | --- |
 | Arrows | Move the cursor, or the grabbed icon |
 | Space | Grab or release the icon under the cursor |
 | Enter / F1 | Start a game |
-| R / F4 | Retry the problem (twice per problem, the clock keeps running, no time bonus) |
+| R / F4 | Restart the problem; the clock keeps running (two retries per game) |
 | S / F5 | Sound on or off |
 | H / F3 | High scores |
 | C / F7 | Credits |
@@ -30,7 +38,7 @@ The goal is the set at the bottom right.
 With a mouse or on a touch screen, press an icon and drag it sideways.
 Touch devices also get an on-screen pad.
 
-If the time runs out, you can continue up to four times (five lives).
+If the time runs out, you can continue up to five times.
 
 ## Running locally
 
@@ -69,9 +77,15 @@ The GitHub workflow runs the checks on every push and deploys `main` to
 GitHub Pages. Pages has to be enabled once under *Settings → Pages → Source:
 GitHub Actions*.
 
-### Differences from the original
+### Faithfulness to the original
 
-The rules were reconstructed from the data files and the documentation, not
-from the executable. Lift speed and blast duration were tuned until the
-timing-based lift puzzles could be solved. Two-player mode is not
-implemented. High scores are stored in the browser.
+The rules and timings come from disassembling `BRIX.EXE`: gravity and lift
+speeds (driven by the PC timer chip), how falling icons join a moving lift,
+when icons count as matching, the blast freeze, scoring, retries, lives and
+the level tree. The playing field logic in `src/board.js` is a port of the
+original routines.
+
+Differences: two-player mode is not implemented, high scores are stored in
+the browser (the original's `HIGH` file is not read), and a sideways move
+pressed while icons are still falling is retried for a moment instead of
+being dropped.
