@@ -251,6 +251,10 @@ export class Board {
         i -= 1;
       }
     }
+    if (this.falling.length === 0) {
+      this.fallOffset = 0;
+      return blast;
+    }
     if (this.fallOffset === TILE) {
       this.fallOffset = 0;
       if (this.following) {

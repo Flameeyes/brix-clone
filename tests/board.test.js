@@ -159,6 +159,17 @@ test('an icon on a lift blasts with a neighbour when the lift arrives', () => {
   assert.deepEqual(blasts.map((b) => b.cells.length), [2]);
 });
 
+test('icons keep falling after one lands on a moving lift', () => {
+  const board = boardFrom(['#####', '#.1.#', '#...#', '#.L.#', '#...#', '#.2.#', '#.X.#', '#####'], { x: 2, y: 5 });
+  run(board, 2 * TILE);
+  assert.equal(board.lift?.riders, 1);
+  assert.equal(board.fallOffset, 0);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  run(board, 8);
+  assert.equal(board.at(3, 6), 2);
+});
+
 test('an icon stranded as the last of its kind is detected', () => {
   assert.ok(boardFrom(['#####', '#1.2#', '#####']).isStuck());
 });
