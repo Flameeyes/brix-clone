@@ -261,11 +261,13 @@ export class Board {
         this.cursor.y += 1;
         this.following = false;
       }
+      // The icons stay listed as falling until the next scan decides whether
+      // they keep going, so nothing can be moved between two rows of a fall.
       for (const icon of this.falling) {
         this.set(icon.x, icon.y + 1, this.at(icon.x, icon.y));
         this.set(icon.x, icon.y, EMPTY);
+        icon.y += 1;
       }
-      this.falling = [];
     }
     return blast;
   }
@@ -439,6 +441,13 @@ export class Board {
       return null;
     }
     this.chain += unique.length;
+    // A grabbed icon caught in a blast is let go straight away, so it cannot
+    // be pushed out of the blast while the game is frozen.
+    if (unique.some((cell) => cell.x === this.cursor.x && cell.y === this.cursor.y)) {
+      this.selected = false;
+      this.following = false;
+      this.riding = false;
+    }
     return { cells: unique, chain: this.chain };
   }
 
@@ -446,10 +455,6 @@ export class Board {
   removeBlast(blast) {
     for (const { x, y } of blast.cells) {
       this.set(x, y, EMPTY);
-      if (x === this.cursor.x && y === this.cursor.y) {
-        this.selected = false;
-        this.riding = false;
-      }
     }
     this.countRiders();
   }

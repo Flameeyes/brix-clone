@@ -510,7 +510,7 @@ export class Game {
 
   /** @param {number} units */
   updatePlay(units) {
-    if (this.pendingSlide) {
+    if (this.pendingSlide && !this.blasting) {
       this.pendingSlide.units -= units;
       this.trySlide();
       if (this.pendingSlide && this.pendingSlide.units <= 0) {
@@ -569,6 +569,9 @@ export class Game {
     const first = blast.cells[0];
     this.popups.push({ text: String(points), x: first.x, y: first.y, units: BLAST_UNITS + 600000 });
     this.blasting = { blast, units: 0 };
+    if (!this.board.selected) {
+      this.pendingSlide = null;
+    }
     this.sound.blast();
     return true;
   }

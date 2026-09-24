@@ -116,6 +116,18 @@ test('adjacent matching icons blast, counting towards the chain', () => {
   assert.equal(board.selected, false);
 });
 
+test('a grabbed icon caught in a blast is let go before it blasts', () => {
+  const board = boardFrom(['######', '#1.1.#', '######']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  const blast = board.gravityStep();
+  assert.ok(blast);
+  assert.equal(board.selected, false);
+  assert.equal(board.slide(1), false);
+  board.removeBlast(blast);
+  assert.ok(board.isCleared());
+});
+
 test('three icons blast at once', () => {
   const board = boardFrom(['#####', '#2..#', '#X.2#', '#X2X#', '#####']);
   board.toggleSelect();
@@ -130,6 +142,17 @@ test('nothing can be moved while an icon falls', () => {
   assert.ok(board.slide(1));
   board.gravityStep();
   assert.ok(board.falling.length > 0);
+  assert.equal(board.slide(1), false);
+});
+
+test('nothing can be moved between two rows of a fall', () => {
+  const board = boardFrom(['######', '#1...#', '#X...#', '#X...#', '#X...#', '######']);
+  board.toggleSelect();
+  assert.ok(board.slide(1));
+  for (let i = 0; i < TILE; i++) {
+    board.gravityStep();
+  }
+  assert.equal(board.fallOffset, 0);
   assert.equal(board.slide(1), false);
 });
 
